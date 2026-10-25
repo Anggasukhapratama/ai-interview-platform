@@ -3,7 +3,7 @@ import type { Session, CoverageMap, TranscriptTurn, Portfolio, CandidateInfo } f
 
 export const sessionsApi = {
   get: (id: number) =>
-    api.get<{ session: Session; assessment: { id: number; name: string; time_limit_min: number } }>(
+    api.get<{ session: Session; assessment?: { id: number; name: string; time_limit_min: number } }>(
       `/sessions/${id}`
     ),
 
@@ -28,6 +28,12 @@ export const sessionsApi = {
 
   getCandidateInfo: (token: string) =>
     api.get<CandidateInfo>(`/sessions/${token}/candidate`),
+
+  recordConsent: (token: string, consentVersion = "UU-PDP-2022-v1") =>
+    api.post<{ consent_given: boolean; consent_given_at: string; consent_version: string }>(
+      `/sessions/${token}/consent`,
+      { consent_version: consentVersion }
+    ),
 
   audioComplete: (token: string) =>
     api.post<{ ended: boolean; message: string }>(`/sessions/${token}/audio_complete`),

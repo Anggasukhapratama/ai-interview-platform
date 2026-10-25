@@ -3,8 +3,8 @@
 module Api
   module V1
     class SessionsController < ApiController
-      authorize_auth_token! :assessor, except: %i[candidate_info audio_complete]
-      skip_before_action :require_tenant!, only: %i[candidate_info audio_complete]
+      authorize_auth_token! :assessor, except: %i[candidate_info record_consent audio_complete]
+      skip_before_action :require_tenant!, only: %i[candidate_info record_consent audio_complete]
 
       before_action :set_session, only: %i[show end_session coverage transcript]
 
@@ -15,7 +15,7 @@ module Api
 
         json_response(sessions: sessions.map(&method(:session_json)))
       rescue ActiveRecord::RecordNotFound
-        json_error("Assessment not found", :not_found)
+        json_error('Assessment not found', :not_found)
       end
 
       # POST /api/v1/assessments/:assessment_id/sessions
@@ -40,7 +40,7 @@ module Api
           json_error(session.errors.full_messages.first, :unprocessable_entity)
         end
       rescue ActiveRecord::RecordNotFound
-        json_error("Assessment not found", :not_found)
+        json_error('Assessment not found', :not_found)
       end
 
       # GET /api/v1/sessions/:id
@@ -56,16 +56,16 @@ module Api
         )
       end
 
-      # POST /api/v1/sessions/:id/end
+      # POST /api/v1/sessions/:id/end_session
       def end_session
         if @session.ended?
-          return json_error("Session is already ended", :unprocessable_entity)
+          return json_error('Session is already ended', :unprocessable_entity)
         end
 
-        reason = params.dig(:session, :reason) || "manual_assessor"
+        reason = params.dig(:session, :reason) || 'manual_assessor'
 
         unless Session::END_REASONS.include?(reason)
-          return json_error("Invalid end reason", :unprocessable_entity)
+          return json_error('Invalid end reason', :unprocessable_entity)
         end
 
         result = Sessions::EndHandler.new(@session).call(reason: reason)
@@ -73,7 +73,7 @@ module Api
         if result
           json_response(session: session_json(@session.reload))
         else
-          json_error("Failed to end session", :unprocessable_entity)
+          json_error('Failed to end session', :unprocessable_entity)
         end
       end
 
@@ -93,8 +93,8 @@ module Api
       def transcript
         from_turn = params[:from_turn].to_i
         turns     = @session.transcript_turns
-                             .ordered
-                             .then { from_turn > 0 ? _1.where("turn_number >= ?", from_turn) : _1 }
+                            .ordered
+                            .then { from_turn.positive? ? _1.where('turn_number >= ?', from_turn) : _1 }
 
         json_response(
           turns: turns.map do |t|
@@ -112,28 +112,51 @@ module Api
         )
       end
 
-      # POST /sessions/:token/audio_complete  — no JWT, invite token in URL
-      # Called by the frontend when the audio queue drains after a preparing_to_end signal.
-      # Ends the session if all coverage is complete; idempotent if already ended.
-      def audio_complete
+      # POST /api/v1/sessions/:token/consent — UU PDP explicit candidate consent before audio capture
+      def record_consent
         session = Session.unscoped.find_by(invite_token: params[:token])
-        return json_error("Invalid or expired invite token", :not_found) unless session
+        return json_error('Invalid or expired invite token', :not_found) unless session
 
-        return json_response(ended: true, message: "Session already ended") if session.ended?
+        if session.ended? || session.failed?
+          return json_error('Session has already ended', :unprocessable_entity)
+        end
 
-        # No coverage re-check here. The backend WS already verified all_covered
-        # before sending preparing_to_end. Re-checking here caused false negatives
-        # (timing gap between WS detection and HTTP call) that stalled auto-end.
-        Sessions::EndHandler.new(session).call(reason: 'all_covered')
-        json_response(ended: true, message: "Session ended")
+        version = params[:consent_version].presence || 'UU-PDP-2022-v1'
+        session.update!(
+          consent_given_at: session.consent_given_at || Time.current,
+          consent_version:  version
+        )
+
+        json_response(
+          consent_given:    true,
+          consent_given_at: session.consent_given_at,
+          consent_version:  session.consent_version
+        )
       end
 
-      # GET /sessions/:token/candidate  — no JWT, invite token in URL
+      # POST /api/v1/sessions/:token/audio_complete — no JWT, invite token in URL
+      # Called by the frontend when the audio queue drains after a preparing_to_end signal.
+      # Ends the session if active; idempotent if already ended.
+      def audio_complete
+        session = Session.unscoped.find_by(invite_token: params[:token])
+        return json_error('Invalid or expired invite token', :not_found) unless session
+
+        return json_response(ended: true, message: 'Session already ended') if session.ended?
+
+        if session.pending?
+          return json_error('Session has not started yet', :unprocessable_entity)
+        end
+
+        Sessions::EndHandler.new(session).call(reason: 'all_covered')
+        json_response(ended: true, message: 'Session ended')
+      end
+
+      # GET /api/v1/sessions/:token/candidate — no JWT, invite token in URL
       def candidate_info
         session = Session.unscoped.find_by(invite_token: params[:token])
 
         unless session
-          return json_error("Invalid or expired invite token", :not_found)
+          return json_error('Invalid or expired invite token', :not_found)
         end
 
         # Resolve tenant from the session's own tenant_id so we can load the assessment
@@ -142,14 +165,19 @@ module Api
                                .find_by(id: session.assessment_id)
 
         unless assessment
-          return json_error("Assessment not found", :not_found)
+          return json_error('Assessment not found', :not_found)
         end
 
         json_response(
-          session_id:      session.id,
-          role_title:      assessment.name,
-          time_limit_min:  assessment.time_limit_min,
-          session_status:  session.status
+          session_id:       session.id,
+          role_title:       assessment.name,
+          time_limit_min:   assessment.time_limit_min,
+          language:         assessment.language || 'en',
+          session_status:   session.status,
+          started_at:       session.started_at,
+          candidate_name:   session.candidate_name,
+          consent_given:    session.consent_given?,
+          consent_given_at: session.consent_given_at
         )
       end
 
@@ -158,7 +186,7 @@ module Api
       def set_session
         @session = Session.find(params[:id])
       rescue ActiveRecord::RecordNotFound
-        json_error("Session not found", :not_found)
+        json_error('Session not found', :not_found)
       end
 
       def session_json(session)
@@ -175,6 +203,8 @@ module Api
           started_at:       session.started_at,
           ended_at:         session.ended_at,
           duration_seconds: session.duration_seconds,
+          consent_given_at: session.consent_given_at,
+          consent_version:  session.consent_version,
           created_at:       session.created_at
         }
       end

@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'ostruct'
-
 # Extracted and simplified from rakamin-api.
 # Bearer token only (no basic auth — AI interview has no whitelist-key consumers).
 # Returns { user_id:, role:, scheme: } from the decoded JWT.
@@ -11,12 +9,14 @@ class AuthorizeApiRequest
   # rakamin-api uses 'admin'; 'assessor' is planned as a future role.
   ASSESSOR_ROLES = %w[admin assessor].freeze
 
+  UserPrincipal = Struct.new(:id, :role, :scheme, keyword_init: true)
+
   def initialize(headers = {}, required_roles = [])
     @headers = headers
     @required_roles = Array(required_roles)
   end
 
-  # Returns an OpenStruct with :id, :role, :scheme
+  # Returns a UserPrincipal struct with :id, :role, :scheme
   def call
     claims = decoded_auth_token
     user_struct = build_user_struct(claims)
@@ -31,7 +31,7 @@ class AuthorizeApiRequest
   attr_reader :headers
 
   def build_user_struct(claims)
-    OpenStruct.new(
+    UserPrincipal.new(
       id:     claims[:user_id],
       role:   claims[:role].to_s,
       scheme: claims[:scheme].to_s

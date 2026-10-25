@@ -9,7 +9,7 @@ module Portfolios
       @session = session
       @gemini_client = gemini_client || Gemini::HttpClient.new(
         model:   ENV.fetch('GEMINI_PRO_MODEL', 'gemini-2.0-pro-001'),
-        timeout: 180  # up to 3 minutes for large transcripts
+        timeout: 180 # up to 3 minutes for large transcripts
       )
     end
 
@@ -20,18 +20,28 @@ module Portfolios
         generation_status: 'pending'
       )
 
-      portfolio.update!(generation_status: 'generating')
+      portfolio.update!(generation_status: 'generating', generation_error: nil)
+
+      candidate_turns = @session.transcript_turns.where(speaker: 'candidate')
+      if candidate_turns.none?
+        ActiveRecord::Base.transaction do
+          portfolio.portfolio_skills.destroy_all
+          portfolio.update!(generation_status: 'complete', generated_at: Time.current, generation_error: nil)
+        end
+        Rails.logger.info("[N10] Session #{@session.id} had 0 candidate turns — completed portfolio with 0 assessed skills")
+        return portfolio
+      end
 
       prompt   = build_prompt
       response = @gemini_client.generate_content(prompt, temperature: 0.2)
 
       save_skills(portfolio, response)
-      portfolio.update!(generation_status: 'complete', generated_at: Time.current)
+      portfolio.update!(generation_status: 'complete', generated_at: Time.current, generation_error: nil)
 
       Rails.logger.info("[N10] Portfolio generated for session #{@session.id}")
       portfolio
-    rescue => e
-      portfolio&.update!(generation_status: 'failed', generation_error: e.message)
+    rescue StandardError => e
+      portfolio&.update(generation_status: 'failed', generation_error: e.message)
       Rails.logger.error("[N10] Portfolio generation failed for session #{@session.id}: #{e.class} #{e.message}")
       raise
     end
@@ -39,7 +49,7 @@ module Portfolios
     private
 
     def build_prompt
-      assessment       = @session.assessment
+      assessment        = @session.assessment
       configured_skills = assessment.assessment_skills.order(:display_order)
       coverage_maps     = @session.coverage_maps.order(:id)
       turns             = @session.transcript_turns.ordered
@@ -78,7 +88,8 @@ module Portfolios
         TASK
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-        For EACH skill in the coverage map (both configured and discovered):
+        For EACH skill in the coverage map that was actually discussed in the transcript:
+        IMPORTANT: If a configured skill has state = "not_yet" (probe_count = 0) AND there is NO candidate evidence in the transcript for that skill, DO NOT fabricate a level 1 rating — omit it from "configured_skills" or set "level": null so it is accurately recorded as unassessed.
 
         1. FIND THE EVIDENCE
            Read all transcript turns where this skill was discussed.
@@ -103,7 +114,7 @@ module Portfolios
         {
           "configured_skills": [
             {
-              "skill_id": "sk-eng-001",
+              "skill_id": "SK-ENG-001",
               "skill_label": "React / Frontend Development",
               "level": 3,
               "confidence": "high",
@@ -125,10 +136,11 @@ module Portfolios
     end
 
     def skill_definition_block(skill)
-      lines = ["━━━━━━━━━━━━━━━"]
+      lines = ['━━━━━━━━━━━━━━━']
       lines << "SKILL: #{skill.skill_label} (#{skill.skill_id || 'custom'})"
       lines << "SCOPE: #{skill.scope_include}" if skill.scope_include.present?
-      lines << ""
+      lines << "WHAT DOES NOT COUNT: #{skill.scope_exclude}" if skill.scope_exclude.present?
+      lines << ''
       lines << "L1 — #{skill.l1_anchor}"
       lines << "L2 — #{skill.l2_anchor}"
       lines << "L3 — #{skill.l3_anchor}"
@@ -139,43 +151,118 @@ module Portfolios
 
     def coverage_json(map)
       {
-        id:          map.skill_id || map.skill_label.downcase.gsub(/\s+/, '-'),
-        label:       map.skill_label,
-        state:       map.state,
-        probe_count: map.probe_count,
+        id:            map.skill_id || map.skill_label.downcase.gsub(/\s+/, '-'),
+        label:         map.skill_label,
+        state:         map.state,
+        probe_count:   map.probe_count,
         is_discovered: map.is_discovered
       }
     end
 
     def save_skills(portfolio, response)
       data = response.is_a?(Hash) ? response : JSON.parse(response)
+      coverage_maps = @session.coverage_maps.to_a
+      configured_skills = @session.assessment.assessment_skills.to_a
 
-      # Destroy existing skills (idempotent regeneration)
-      portfolio.portfolio_skills.destroy_all
+      ActiveRecord::Base.transaction do
+        # Preserve existing assessor overrides by matching skill_id / skill_label before replacing skills
+        existing_overrides = portfolio.portfolio_skills.includes(:assessor_override).each_with_object({}) do |ps, memo|
+          next unless ps.assessor_override
 
-      (data['configured_skills'] || []).each do |skill_data|
-        portfolio.portfolio_skills.create!(
-          skill_id:           skill_data['skill_id'],
-          skill_label:        skill_data['skill_label'],
-          is_discovered:      false,
-          ai_level:           skill_data['level'].to_i.clamp(1, 5),
-          ai_confidence:      skill_data['confidence'],
-          evidence:           Array(skill_data['evidence']).first(3),
-          competency_summary: skill_data['competency_summary']
-        )
+          key = (ps.skill_id.presence || ps.skill_label).to_s.downcase.strip
+          memo[key] = ps.assessor_override.slice(:override_level, :assessor_notes, :overridden_by, :overridden_at)
+        end
+
+        portfolio.portfolio_skills.destroy_all
+
+        Array(data['configured_skills']).each do |skill_data|
+          next unless skill_data.is_a?(Hash)
+
+          raw_level = skill_data['level']
+          next if raw_level.nil? || raw_level.to_i <= 0
+
+          label    = skill_data['skill_label'].to_s.strip
+          skill_id = canonical_skill_id(skill_data['skill_id'], label, configured_skills)
+          next if label.blank?
+
+          # Check if the skill was never probed in coverage_maps AND has no evidence quotes
+          cov_map = find_coverage_map(coverage_maps, skill_id, label)
+          evidence_quotes = Array(skill_data['evidence']).map(&:to_s).map(&:strip).reject(&:blank?).first(3)
+          if cov_map && cov_map.state == 'not_yet' && cov_map.probe_count.to_i.zero? && evidence_quotes.empty?
+            next
+          end
+
+          created = portfolio.portfolio_skills.create!(
+            skill_id:           skill_id,
+            skill_label:        label,
+            is_discovered:      false,
+            ai_level:           raw_level.to_i.clamp(1, 5),
+            ai_confidence:      normalize_confidence(skill_data['confidence']),
+            evidence:           evidence_quotes,
+            competency_summary: skill_data['competency_summary'].to_s.strip.presence || 'Evaluated from interview transcript.'
+          )
+
+          restore_override_if_present(created, existing_overrides)
+        end
+
+        Array(data['discovered_skills']).each do |skill_data|
+          next unless skill_data.is_a?(Hash)
+
+          raw_level = skill_data['level']
+          next if raw_level.nil? || raw_level.to_i <= 0
+
+          label = skill_data['skill_label'].to_s.strip
+          next if label.blank?
+
+          evidence_quotes = Array(skill_data['evidence']).map(&:to_s).map(&:strip).reject(&:blank?).first(3)
+
+          created = portfolio.portfolio_skills.create!(
+            skill_id:           nil,
+            skill_label:        label,
+            is_discovered:      true,
+            ai_level:           raw_level.to_i.clamp(1, 5),
+            ai_confidence:      normalize_confidence(skill_data['confidence']),
+            evidence:           evidence_quotes,
+            competency_summary: skill_data['competency_summary'].to_s.strip.presence || 'Discovered during interview.'
+          )
+
+          restore_override_if_present(created, existing_overrides)
+        end
       end
+    end
 
-      (data['discovered_skills'] || []).each do |skill_data|
-        portfolio.portfolio_skills.create!(
-          skill_id:           nil,
-          skill_label:        skill_data['skill_label'],
-          is_discovered:      true,
-          ai_level:           skill_data['level'].to_i.clamp(1, 5),
-          ai_confidence:      skill_data['confidence'],
-          evidence:           Array(skill_data['evidence']).first(3),
-          competency_summary: skill_data['competency_summary']
-        )
+    def normalize_confidence(raw)
+      normalized = raw.to_s.downcase.strip
+      PortfolioSkill::CONFIDENCE_LEVELS.include?(normalized) ? normalized : 'low'
+    end
+
+    def canonical_skill_id(raw_id, label, configured_skills)
+      match = configured_skills.find do |s|
+        (raw_id.present? && s.skill_id.present? && s.skill_id.casecmp?(raw_id.to_s)) ||
+          s.skill_label.to_s.casecmp?(label.to_s)
       end
+      match&.skill_id || raw_id.presence
+    end
+
+    def find_coverage_map(coverage_maps, skill_id, label)
+      coverage_maps.find do |m|
+        (skill_id.present? && m.skill_id.present? && m.skill_id.casecmp?(skill_id.to_s)) ||
+          m.skill_label.to_s.casecmp?(label.to_s)
+      end
+    end
+
+    def restore_override_if_present(portfolio_skill, existing_overrides)
+      key = (portfolio_skill.skill_id.presence || portfolio_skill.skill_label).to_s.downcase.strip
+      saved = existing_overrides[key]
+      return unless saved
+
+      portfolio_skill.create_assessor_override!(
+        ai_level:       portfolio_skill.ai_level,
+        override_level: saved[:override_level],
+        assessor_notes: saved[:assessor_notes],
+        overridden_by:  saved[:overridden_by],
+        overridden_at:  saved[:overridden_at]
+      )
     end
   end
 end

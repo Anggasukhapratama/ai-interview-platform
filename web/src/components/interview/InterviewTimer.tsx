@@ -3,31 +3,51 @@ import { cn } from "@/lib/utils";
 
 interface InterviewTimerProps {
   totalSeconds: number;
+  startedAt?: string | null;
   onExpired?: () => void;
   running: boolean;
 }
 
 function formatTime(s: number) {
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
+  const clamped = Math.max(0, s);
+  const m = Math.floor(clamped / 60);
+  const sec = clamped % 60;
   return `${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
 
-export default function InterviewTimer({ totalSeconds, onExpired, running }: InterviewTimerProps) {
-  const [remaining, setRemaining] = useState(totalSeconds);
+function computeInitialRemaining(totalSeconds: number, startedAt?: string | null): number {
+  if (!startedAt) return totalSeconds;
+  const startedMs = Date.parse(startedAt);
+  if (Number.isNaN(startedMs)) return totalSeconds;
+  const elapsedSeconds = Math.floor((Date.now() - startedMs) / 1000);
+  return Math.max(0, totalSeconds - Math.max(0, elapsedSeconds));
+}
+
+export default function InterviewTimer({
+  totalSeconds,
+  startedAt,
+  onExpired,
+  running,
+}: InterviewTimerProps) {
+  const [remaining, setRemaining] = useState(() =>
+    computeInitialRemaining(totalSeconds, startedAt)
+  );
 
   useEffect(() => {
-    setRemaining(totalSeconds);
-  }, [totalSeconds]);
+    setRemaining(computeInitialRemaining(totalSeconds, startedAt));
+  }, [totalSeconds, startedAt]);
 
   useEffect(() => {
     if (!running) return;
-    if (remaining <= 0) { onExpired?.(); return; }
+    if (remaining <= 0) {
+      onExpired?.();
+      return;
+    }
     const id = setTimeout(() => setRemaining((r) => r - 1), 1000);
     return () => clearTimeout(id);
   }, [running, remaining, onExpired]);
 
-  const isWarning = remaining <= 300; // ≤5 min
+  const isWarning = remaining <= 300; // <=5 min
   const isUrgent = remaining <= 60;
 
   return (

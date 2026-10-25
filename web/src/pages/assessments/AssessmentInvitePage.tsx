@@ -33,21 +33,22 @@ function SessionRow({
 }) {
   const navigate = useNavigate();
   const isLive = session.status === "active";
-  const isEnded = session.status === "ended";
+  const isEnded = session.status === "ended" || session.status === "failed";
   const isPending = session.status === "pending";
   const displayName = session.candidate_name || `Candidate ${index}`;
 
   return (
-    <div className="flex items-center justify-between py-3 px-4">
-      <div className="flex items-center gap-3">
-        <div className="flex items-center justify-center w-7 h-7 rounded-full bg-muted text-xs font-medium text-muted-foreground">
+    <div className="flex flex-wrap items-center justify-between gap-2 py-3 px-4">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center justify-center w-7 h-7 rounded-full bg-muted text-xs font-medium text-muted-foreground shrink-0">
           {index}
         </div>
-        <div className="space-y-0.5">
-          <div className="text-sm font-medium">{displayName}</div>
+        <div className="space-y-0.5 min-w-0">
+          <div className="text-sm font-medium truncate">{displayName}</div>
           {session.started_at && (
             <div className="text-xs text-muted-foreground">
               {new Date(session.started_at).toLocaleDateString()}
+              {session.consent_given_at && " · UU PDP Consent ✓"}
             </div>
           )}
         </div>
@@ -66,13 +67,13 @@ function SessionRow({
             Live
           </span>
         )}
-        {isEnded && session.end_reason === "error" && (
+        {isEnded && (session.end_reason === "error" || session.status === "failed") && (
           <span className="flex items-center gap-1 text-xs text-destructive">
             <span className="w-1.5 h-1.5 rounded-full bg-destructive" />
-            Failed
+            Interrupted
           </span>
         )}
-        {isEnded && session.end_reason !== "error" && (
+        {isEnded && session.end_reason !== "error" && session.status !== "failed" && (
           <span className="flex items-center gap-1 text-xs text-green-600">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
             Completed
@@ -80,7 +81,7 @@ function SessionRow({
         )}
 
         <div className="flex items-center gap-1.5">
-          {isPending && (
+          {(isPending || isLive) && (
             <Button
               variant="ghost"
               size="sm"
@@ -88,9 +89,13 @@ function SessionRow({
               onClick={() => onCopy(session.id)}
             >
               {copiedId === session.id ? (
-                <><Check className="h-3 w-3 mr-1" /> Copied</>
+                <>
+                  <Check className="h-3 w-3 mr-1" /> Copied
+                </>
               ) : (
-                <><Copy className="h-3 w-3 mr-1" /> Copy link</>
+                <>
+                  <Copy className="h-3 w-3 mr-1" /> Copy link
+                </>
               )}
             </Button>
           )}
@@ -104,7 +109,7 @@ function SessionRow({
               <Eye className="h-3 w-3 mr-1" /> Monitor
             </Button>
           )}
-          {isEnded && session.end_reason !== "error" && (
+          {isEnded && (
             <Button
               variant="outline"
               size="sm"
@@ -142,15 +147,18 @@ export default function AssessmentInvitePage() {
     Promise.all([
       assessmentsApi.get(Number(id)),
       assessmentsApi.getSessions(Number(id)),
-    ]).then(([aRes, sRes]) => {
-      setAssessment(aRes.data.assessment);
-      setSessions(sRes.data.sessions);
-    }).catch(() => {}).finally(() => setLoading(false));
+    ])
+      .then(([aRes, sRes]) => {
+        setAssessment(aRes.data.assessment);
+        setSessions(sRes.data.sessions);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, [id]);
 
   // Poll while any session is live or pending
   useEffect(() => {
-    const hasActive = sessions.some((s) => s.status !== "ended");
+    const hasActive = sessions.some((s) => s.status !== "ended" && s.status !== "failed");
     if (!hasActive) return;
     const interval = setInterval(loadSessions, 5000);
     return () => clearInterval(interval);
@@ -175,15 +183,22 @@ export default function AssessmentInvitePage() {
     }
   };
 
-  const copyLink = (session: Session, id: number) => {
-    navigator.clipboard.writeText(session.invite_url);
-    setCopiedId(id);
+  const getFrontendInviteUrl = (session: Session) => {
+    if (typeof window !== "undefined" && session.invite_token) {
+      return `${window.location.origin}/interview/${session.invite_token}`;
+    }
+    return session.invite_url;
+  };
+
+  const copyLink = (session: Session, sid: number) => {
+    navigator.clipboard.writeText(getFrontendInviteUrl(session));
+    setCopiedId(sid);
     setTimeout(() => setCopiedId(null), 2000);
   };
 
   const copyNewSessionLink = () => {
-    if (!newSession?.invite_url) return;
-    navigator.clipboard.writeText(newSession.invite_url);
+    if (!newSession) return;
+    navigator.clipboard.writeText(getFrontendInviteUrl(newSession));
     setNewSessionCopied(true);
     setTimeout(() => setNewSessionCopied(false), 2000);
   };
@@ -245,7 +260,9 @@ export default function AssessmentInvitePage() {
             <p className="text-xs text-muted-foreground">Optional — helps you identify this session later.</p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowInviteDialog(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setShowInviteDialog(false)}>
+              Cancel
+            </Button>
             <Button onClick={handleInviteCandidate}>Create Link</Button>
           </DialogFooter>
         </DialogContent>
@@ -256,20 +273,28 @@ export default function AssessmentInvitePage() {
         <Card className="border-primary/30 bg-primary/5">
           <CardContent className="pt-4 space-y-2">
             <p className="text-sm font-medium">
-              {newSession.candidate_name
-                ? <>Link for <span className="font-semibold">{newSession.candidate_name}</span> ready — share with your candidate:</>
-                : <>New invite link ready — share with your candidate:</>}
+              {newSession.candidate_name ? (
+                <>
+                  Link for <span className="font-semibold">{newSession.candidate_name}</span> ready — share with your candidate:
+                </>
+              ) : (
+                <>New invite link ready — share with your candidate:</>
+              )}
             </p>
             <div className="flex items-center gap-2 border rounded-md px-3 py-2 bg-white">
               <span className="flex-1 text-sm font-mono truncate text-muted-foreground">
-                {newSession.invite_url}
+                {getFrontendInviteUrl(newSession)}
               </span>
             </div>
             <Button variant="outline" size="sm" onClick={copyNewSessionLink} className="w-full">
               {newSessionCopied ? (
-                <><Check className="h-3.5 w-3.5 mr-1.5" /> Copied!</>
+                <>
+                  <Check className="h-3.5 w-3.5 mr-1.5" /> Copied!
+                </>
               ) : (
-                <><Copy className="h-3.5 w-3.5 mr-1.5" /> Copy link</>
+                <>
+                  <Copy className="h-3.5 w-3.5 mr-1.5" /> Copy link
+                </>
               )}
             </Button>
           </CardContent>

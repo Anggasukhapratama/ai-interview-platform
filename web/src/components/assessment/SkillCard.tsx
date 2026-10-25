@@ -3,7 +3,6 @@ import { UseFormReturn, useWatch } from "react-hook-form";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, X, ChevronDown, ChevronRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import LevelRadio from "./LevelRadio";
 import CustomSkillForm from "./CustomSkillForm";
 import { cn } from "@/lib/utils";
@@ -24,6 +23,13 @@ export default function SkillCard({ index, id, form, onRemove }: SkillCardProps)
   const skill = useWatch({ control: form.control, name: `skills.${index}` });
   const isCustom = skill?.is_custom;
   const skillLabel = skill?.skill_label || "New Skill";
+
+  const formattedSkillCode = (() => {
+    if (isCustom) return "Custom";
+    if (!skill?.skill_id) return "Taxonomy";
+    const raw = String(skill.skill_id);
+    return raw.toUpperCase().startsWith("SK-") ? raw : `SK-${raw.padStart(3, "0")}`;
+  })();
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -53,8 +59,8 @@ export default function SkillCard({ index, id, form, onRemove }: SkillCardProps)
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm truncate">{skillLabel}</span>
-            <span className="text-xs text-muted-foreground shrink-0">
-              {isCustom ? "Custom" : skill?.skill_id ? `SK-${String(skill.skill_id).padStart(3, "0")}` : ""}
+            <span className="text-xs font-mono text-muted-foreground shrink-0 bg-muted px-1.5 py-0.5 rounded">
+              {formattedSkillCode}
             </span>
           </div>
         </div>
@@ -82,11 +88,21 @@ export default function SkillCard({ index, id, form, onRemove }: SkillCardProps)
               className="flex items-center gap-1 text-xs text-primary hover:underline"
             >
               {anchorsOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              {anchorsOpen ? "Hide L1–L5 anchors" : "Show L1–L5 anchors"}
+              {anchorsOpen ? "Hide L1–L5 anchors & scope" : "Show L1–L5 anchors & scope"}
             </button>
 
             {anchorsOpen && (
-              <div className="text-xs text-muted-foreground space-y-1 bg-muted/50 rounded p-2">
+              <div className="text-xs text-muted-foreground space-y-1.5 bg-muted/50 rounded p-2.5">
+                {skill?.scope_include && (
+                  <div>
+                    <span className="font-medium text-foreground">Scope Include:</span> {skill.scope_include}
+                  </div>
+                )}
+                {skill?.scope_exclude && (
+                  <div>
+                    <span className="font-medium text-foreground">What Does Not Count:</span> {skill.scope_exclude}
+                  </div>
+                )}
                 {[1, 2, 3, 4, 5].map((level) => {
                   const anchor = skill?.[`l${level}_anchor` as keyof typeof skill] as string;
                   return anchor ? (

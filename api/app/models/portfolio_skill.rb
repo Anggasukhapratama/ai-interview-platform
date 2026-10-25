@@ -15,4 +15,8 @@ class PortfolioSkill < ApplicationRecord
   def evidence_quotes
     Array(evidence)
   end
+
+  def effective_level
+    assessor_override ? assessor_override.override_level : ai_level
+  end
 end

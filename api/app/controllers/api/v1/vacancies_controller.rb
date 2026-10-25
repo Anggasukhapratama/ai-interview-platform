@@ -37,7 +37,9 @@ module Api
       # PUT /api/v1/vacancies/:id
       def update
         if @vacancy.update(vacancy_params)
-          json_response(vacancy: vacancy_with_skills_json(@vacancy))
+          # Invalidate cached FitGapReports for this vacancy so subsequent views reflect updated requirements
+          FitGapReport.where(vacancy_id: @vacancy.id).destroy_all
+          json_response(vacancy: vacancy_with_skills_json(@vacancy.reload))
         else
           json_error(@vacancy.errors.full_messages.first, :unprocessable_entity)
         end
@@ -45,8 +47,11 @@ module Api
 
       # DELETE /api/v1/vacancies/:id
       def destroy
-        @vacancy.destroy
-        json_response(message: "Vacancy deleted")
+        if @vacancy.destroy
+          json_response(message: 'Vacancy deleted')
+        else
+          json_error(@vacancy.errors.full_messages.first || 'Cannot delete vacancy', :unprocessable_entity)
+        end
       end
 
       private
@@ -54,7 +59,7 @@ module Api
       def set_vacancy
         @vacancy = Vacancy.find(params[:id])
       rescue ActiveRecord::RecordNotFound
-        json_error("Vacancy not found", :not_found)
+        json_error('Vacancy not found', :not_found)
       end
 
       def vacancy_params
@@ -70,13 +75,13 @@ module Api
 
       def vacancy_json(vacancy)
         {
-          id:                       vacancy.id,
-          role_title:               vacancy.role_title,
-          culture_dimensions:       vacancy.culture_dimensions,
-          competency_expectations:  vacancy.competency_expectations,
-          created_by:               vacancy.created_by,
-          created_at:               vacancy.created_at,
-          updated_at:               vacancy.updated_at
+          id:                      vacancy.id,
+          role_title:              vacancy.role_title,
+          culture_dimensions:      vacancy.culture_dimensions,
+          competency_expectations: vacancy.competency_expectations,
+          created_by:              vacancy.created_by,
+          created_at:              vacancy.created_at,
+          updated_at:              vacancy.updated_at
         }
       end
 

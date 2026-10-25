@@ -10,7 +10,6 @@ import { Search, Loader2 } from "lucide-react";
 import { skillTaxonomiesApi } from "@/services/skillTaxonomies";
 import type { AssessmentSkill, SkillTaxonomy } from "@/types";
 
-
 interface SkillPickerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -28,21 +27,29 @@ export default function SkillPicker({ open, onOpenChange, onSelect }: SkillPicke
     skillTaxonomiesApi
       .list()
       .then((res) => setSkills(res.data.skill_taxonomies ?? []))
-      .catch((err) => { console.error("skill_taxonomies fetch failed:", err); setSkills([]); })
+      .catch((err) => {
+        console.error("skill_taxonomies fetch failed:", err);
+        setSkills([]);
+      })
       .finally(() => setLoading(false));
   }, [open]);
 
-  const filtered = skills.filter((s) =>
-    s.skill_label.toLowerCase().includes(query.toLowerCase())
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = skills.filter(
+    (s) =>
+      s.skill_label.toLowerCase().includes(normalizedQuery) ||
+      s.skill_id.toLowerCase().includes(normalizedQuery) ||
+      (s.category && s.category.toLowerCase().includes(normalizedQuery))
   );
 
   const handleSelect = (s: SkillTaxonomy) => {
     onSelect({
-      skill_id: undefined,
+      skill_id: s.skill_id,
       skill_label: s.skill_label,
       is_custom: false,
       expected_level: 3,
       scope_include: s.scope_include,
+      scope_exclude: s.scope_exclude,
       l1_anchor: s.l1_anchor,
       l2_anchor: s.l2_anchor,
       l3_anchor: s.l3_anchor,
@@ -63,7 +70,7 @@ export default function SkillPicker({ open, onOpenChange, onSelect }: SkillPicke
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search skills..."
+            placeholder="Search by skill name, ID (e.g. SK-ENG-001), or category..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="pl-9"
@@ -84,9 +91,12 @@ export default function SkillPicker({ open, onOpenChange, onSelect }: SkillPicke
                 key={s.skill_id}
                 type="button"
                 onClick={() => handleSelect(s)}
-                className="w-full text-left px-3 py-2 rounded-md hover:bg-muted transition-colors text-sm"
+                className="w-full text-left px-3 py-2 rounded-md hover:bg-muted transition-colors text-sm flex items-center justify-between gap-2"
               >
-                {s.skill_label}
+                <span className="font-medium truncate">{s.skill_label}</span>
+                <span className="text-xs font-mono text-muted-foreground shrink-0 bg-muted px-1.5 py-0.5 rounded">
+                  {s.skill_id}
+                </span>
               </button>
             ))
           )}

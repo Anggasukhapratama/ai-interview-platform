@@ -23,15 +23,31 @@ class AudioRingBuffer
 
   # Appends a PCM audio chunk. Evicts oldest chunks if over capacity.
   def push(pcm_bytes, timestamp: monotonic_now)
+    return if pcm_bytes.nil? || pcm_bytes.empty?
+
     chunk = Chunk.new(timestamp: timestamp, data: pcm_bytes.dup.freeze)
     @chunks.push(chunk)
     @total_bytes += pcm_bytes.bytesize
     evict_oldest while @total_bytes > @capacity_bytes
   end
+  alias write push
 
   # Returns all Chunk structs with timestamp >= since_timestamp, in order.
   def since(since_timestamp)
     @chunks.select { |c| c.timestamp >= since_timestamp }
+  end
+
+  # Drains and returns concatenated binary string of all buffered chunks, clearing the buffer.
+  def drain
+    return ''.b if @chunks.empty?
+
+    combined = @chunks.map(&:data).join
+    clear
+    combined
+  end
+
+  def empty?
+    @chunks.empty?
   end
 
   # Total bytes currently buffered.
