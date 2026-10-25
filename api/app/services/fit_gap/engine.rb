@@ -94,8 +94,14 @@ module FitGap
       end
     end
 
-    def find_portfolio_skill(portfolio_skills, label, _skill_id)
-      # SEEDED FAULT: Intentionally ignore canonical skill_id and match only by skill_label string
+    def find_portfolio_skill(portfolio_skills, label, skill_id)
+      if skill_id.present?
+        matched_by_id = portfolio_skills.find do |s|
+          s[:skill_id].present? && s[:skill_id].to_s.casecmp?(skill_id.to_s)
+        end
+        return matched_by_id if matched_by_id
+      end
+
       portfolio_skills.find { |s| s[:skill_label].to_s.downcase.strip == label.to_s.downcase.strip }
     end
 
