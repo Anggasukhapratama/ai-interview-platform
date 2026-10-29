@@ -1,8 +1,14 @@
 # Laporan Studi Kasus: Fullstack Product Engineer — Revamp AI Interview Platform
 
 **Deliverable Kandidat — Tahap 1 s/d Tahap 6 (Steps 1–6)**  
-**Branch Utama:** `feat/product-revamp`  
-**Branch Bukti Seeded Fault:** `test/seeded-fault-proof`
+**Kandidat:** Angga Sukha Pratama  
+
+| Item Pengumpulan | Tautan / Keterangan |
+| :--- | :--- |
+| **1. GitHub Pull Request (Option A)** | [PR #1: feat/product-revamp -> main](https://github.com/Anggasukhapratama/ai-interview-platform/pull/1) |
+| **2. Branch Revamp Utama** | [`feat/product-revamp`](https://github.com/Anggasukhapratama/ai-interview-platform/tree/feat/product-revamp) |
+| **3. Branch Bukti Seeded Fault Test** | [`test/seeded-fault-proof`](https://github.com/Anggasukhapratama/ai-interview-platform/commits/test/seeded-fault-proof) (Commit `724d4ff` -> `eefc5ac`) |
+| **4. Link Video Walkthrough (Google Drive)** | [https://drive.google.com/file/d/1fk7BtqYUt5yjCRRc8iQS9i6OUiWkiMyW/view?usp=sharing](https://drive.google.com/file/d/1fk7BtqYUt5yjCRRc8iQS9i6OUiWkiMyW/view?usp=sharing) |
 
 ---
 
