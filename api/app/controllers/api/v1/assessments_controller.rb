@@ -30,8 +30,9 @@ module Api
         assessment.created_by = current_user.id
 
         if assessment.save
+          compile_system_prompt_synchronously(assessment)
           SystemPromptGeneratorWorker.perform_async(assessment.id)
-          json_response({ assessment:, system_prompt_generated: true }, :created)
+          json_response({ assessment: assessment_with_skills_json(assessment), system_prompt_generated: true }, :created)
         else
           json_error(assessment.errors.full_messages.first, :unprocessable_entity)
         end
@@ -40,6 +41,7 @@ module Api
       # PUT /api/v1/assessments/:id
       def update
         if @assessment.update(assessment_params)
+          compile_system_prompt_synchronously(@assessment)
           SystemPromptGeneratorWorker.perform_async(@assessment.id)
           json_response({ assessment: assessment_with_skills_json(@assessment), system_prompt_generated: true })
         else
@@ -49,16 +51,26 @@ module Api
 
       # DELETE /api/v1/assessments/:id
       def destroy
-        @assessment.destroy
-        json_response({ message: "Assessment deleted" })
+        if @assessment.destroy
+          json_response({ message: 'Assessment deleted' })
+        else
+          json_error(@assessment.errors.full_messages.first || 'Cannot delete assessment with existing sessions', :unprocessable_entity)
+        end
       end
 
       private
 
+      def compile_system_prompt_synchronously(assessment)
+        prompt = Assessments::SystemPromptCompiler.new(assessment.reload).call
+        assessment.update_column(:system_prompt, prompt)
+      rescue StandardError => e
+        Rails.logger.warn("[AssessmentsController] Inline prompt compile failed: #{e.message}")
+      end
+
       def set_assessment
         @assessment = Assessment.find(params[:id])
       rescue ActiveRecord::RecordNotFound
-        json_error("Assessment not found", :not_found)
+        json_error('Assessment not found', :not_found)
       end
 
       def assessment_params
@@ -99,19 +111,19 @@ module Api
         assessment_json(assessment).merge(
           skills: assessment.assessment_skills.order(:display_order).map do |s|
             {
-              id:            s.id,
-              skill_id:      s.skill_id,
-              skill_label:   s.skill_label,
-              is_custom:     s.is_custom,
-              scope_include: s.scope_include,
-              scope_exclude: s.scope_exclude,
-              l1_anchor:     s.l1_anchor,
-              l2_anchor:     s.l2_anchor,
-              l3_anchor:     s.l3_anchor,
-              l4_anchor:     s.l4_anchor,
-              l5_anchor:     s.l5_anchor,
+              id:             s.id,
+              skill_id:       s.skill_id,
+              skill_label:    s.skill_label,
+              is_custom:      s.is_custom,
+              scope_include:  s.scope_include,
+              scope_exclude:  s.scope_exclude,
+              l1_anchor:      s.l1_anchor,
+              l2_anchor:      s.l2_anchor,
+              l3_anchor:      s.l3_anchor,
+              l4_anchor:      s.l4_anchor,
+              l5_anchor:      s.l5_anchor,
               expected_level: s.expected_level,
-              display_order: s.display_order
+              display_order:  s.display_order
             }
           end
         )

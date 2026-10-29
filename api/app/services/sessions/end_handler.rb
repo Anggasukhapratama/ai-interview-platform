@@ -38,6 +38,7 @@ module Sessions
 
       enqueue_portfolio_generation
       publish_status_update
+      AudioWebSocketMiddleware.notify_session_ended(@session.id, reason: @session.end_reason) if defined?(AudioWebSocketMiddleware)
       Rails.logger.info("[N9/EndHandler] Session #{@session.id} ended (reason=#{reason})")
 
       @session
@@ -48,7 +49,7 @@ module Sessions
     def publish_status_update
       redis = ::Redis.new(url: ENV.fetch('REDIS_URL', 'redis://localhost:6379/1'))
       redis.publish("coverage:#{@session.id}", { type: 'session_status', status: @session.status, end_reason: @session.end_reason }.to_json)
-    rescue => e
+    rescue StandardError => e
       Rails.logger.error("[EndHandler] Failed to publish status update: #{e.message}")
     ensure
       redis&.close

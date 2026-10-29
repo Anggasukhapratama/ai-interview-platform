@@ -25,7 +25,7 @@ import {
   COVERAGE_STATE_COLOR,
 } from "@/utils/constants";
 import { ArrowLeft, CheckCircle, Clock, Radio, Zap } from "lucide-react";
-import type { TranscriptTurn } from "@/types";
+import type { CoverageMap, TranscriptTurn } from "@/types";
 import { cn } from "@/lib/utils";
 
 function ElapsedTimer({ startedAt }: { startedAt: string }) {
@@ -33,7 +33,7 @@ function ElapsedTimer({ startedAt }: { startedAt: string }) {
 
   useEffect(() => {
     const start = new Date(startedAt).getTime();
-    const tick = () => setElapsed(Math.floor((Date.now() - start) / 1000));
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - start) / 1000)));
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
@@ -55,6 +55,7 @@ export default function LiveMonitorPage() {
   const [startedAt, setStartedAt] = useState<string | null>(null);
   const [assessmentName, setAssessmentName] = useState<string>("");
   const [transcript, setTranscript] = useState<TranscriptTurn[]>([]);
+  const [fallbackCoverage, setFallbackCoverage] = useState<CoverageMap | null>(null);
   const [loading, setLoading] = useState(true);
   const [ending, setEnding] = useState(false);
   const [endError, setEndError] = useState(false);
@@ -64,6 +65,8 @@ export default function LiveMonitorPage() {
 
   const { coverageMap, sessionEnded, sessionEndReason, isConnected } =
     useCoverageWebSocket(Number(sessionId));
+
+  const activeCoverage = coverageMap ?? fallbackCoverage;
 
   // On session_ended from WS — stop polling, update local state
   useEffect(() => {
@@ -78,23 +81,27 @@ export default function LiveMonitorPage() {
     Promise.all([
       sessionsApi.get(Number(sessionId)),
       sessionsApi.getTranscript(Number(sessionId)),
+      sessionsApi.getCoverage(Number(sessionId)).catch(() => null),
     ])
-      .then(([sRes, tRes]) => {
+      .then(([sRes, tRes, cRes]) => {
         const s = sRes.data.session as any;
         setStartedAt(s.started_at ?? null);
         setAssessmentName(s.assessment?.name ?? "");
         if (s.status !== "active") setSessionActive(false);
 
         const turns = tRes.data.turns;
-        setTranscript(turns.slice(-10));
+        setTranscript(turns);
         if (turns.length > 0) {
           lastTurnRef.current = turns[turns.length - 1].turn_number;
+        }
+        if (cRes?.data?.skills) {
+          setFallbackCoverage(cRes.data);
         }
       })
       .finally(() => setLoading(false));
   }, [sessionId]);
 
-  // Poll transcript every 3s while session is active
+  // Poll transcript (and coverage fallback if WS is disconnected) every 3s while session is active
   const fetchNewTurns = useCallback(async () => {
     try {
       const res = await sessionsApi.getTranscript(
@@ -102,13 +109,23 @@ export default function LiveMonitorPage() {
         lastTurnRef.current + 1
       );
       if (res.data.turns.length > 0) {
-        setTranscript((prev) => [...prev, ...res.data.turns].slice(-10));
+        setTranscript((prev) => {
+          const existingIds = new Set(prev.map((t) => t.id));
+          const uniqueNew = res.data.turns.filter((t) => !existingIds.has(t.id));
+          return [...prev, ...uniqueNew];
+        });
         lastTurnRef.current = res.data.turns[res.data.turns.length - 1].turn_number;
+      }
+      if (!isConnected) {
+        const covRes = await sessionsApi.getCoverage(Number(sessionId));
+        if (covRes.data?.skills) {
+          setFallbackCoverage(covRes.data);
+        }
       }
     } catch {
       // transient poll failure — silently skip, retry on next interval
     }
-  }, [sessionId]);
+  }, [sessionId, isConnected]);
 
   useEffect(() => {
     if (!sessionActive || loading) return;
@@ -137,8 +154,8 @@ export default function LiveMonitorPage() {
     );
   }
 
-  const configuredSkills = coverageMap?.skills ?? [];
-  const discoveredSkills = coverageMap?.discovered ?? [];
+  const configuredSkills = activeCoverage?.skills ?? [];
+  const discoveredSkills = activeCoverage?.discovered ?? [];
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -163,7 +180,7 @@ export default function LiveMonitorPage() {
             isConnected ? "text-green-600" : "text-muted-foreground"
           )}>
             <Radio className="h-3 w-3" />
-            {isConnected ? "Live" : "Reconnecting..."}
+            {isConnected ? "Live" : "Polling fallback"}
           </span>
         </div>
       </div>
@@ -217,7 +234,7 @@ export default function LiveMonitorPage() {
                   className="h-2"
                 />
                 {skill.last_signal && (
-                  <p className="text-xs text-muted-foreground truncate">
+                  <p className="text-xs text-muted-foreground break-words">
                     "{skill.last_signal}"
                   </p>
                 )}
@@ -253,7 +270,7 @@ export default function LiveMonitorPage() {
                       className="h-2"
                     />
                     {skill.last_signal && (
-                      <p className="text-xs text-muted-foreground truncate">
+                      <p className="text-xs text-muted-foreground break-words">
                         "{skill.last_signal}"
                       </p>
                     )}
@@ -267,14 +284,15 @@ export default function LiveMonitorPage() {
 
       {/* Live transcript */}
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-3 flex flex-row items-center justify-between">
           <CardTitle className="text-sm">Live Transcript</CardTitle>
+          <span className="text-xs text-muted-foreground">{transcript.length} turn{transcript.length !== 1 ? "s" : ""}</span>
         </CardHeader>
         <CardContent>
           {transcript.length === 0 ? (
             <p className="text-sm text-muted-foreground">No transcript yet.</p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
               {transcript.map((turn) => (
                 <TranscriptBubble key={turn.id} speaker={turn.speaker} text={turn.text} />
               ))}

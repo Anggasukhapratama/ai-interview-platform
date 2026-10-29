@@ -9,14 +9,15 @@ export interface Assessment {
   updated_at?: string;
   skills?: AssessmentSkill[];
   latest_session?: {
-    status: "pending" | "active" | "ended";
+    id?: number;
+    status: "pending" | "active" | "ended" | "failed";
     end_reason?: string | null;
   };
 }
 
 export interface AssessmentSkill {
   id?: number;
-  skill_id?: number;
+  skill_id?: string | null;
   skill_label: string;
   is_custom: boolean;
   expected_level: number;
@@ -39,17 +40,24 @@ export interface Session {
   candidate_name?: string;
   invite_token: string;
   invite_url: string;
-  status: "pending" | "active" | "ended";
+  status: "pending" | "active" | "ended" | "failed";
   end_reason?: string;
   started_at?: string;
   ended_at?: string;
   duration_seconds?: number;
+  consent_given_at?: string | null;
+  consent_version?: string | null;
   created_at?: string;
+  assessment?: {
+    id: number;
+    name: string;
+    time_limit_min: number;
+  };
 }
 
 export interface CoverageSkill {
   id: number;
-  skill_id: number;
+  skill_id?: string | null;
   skill_label: string;
   is_discovered: boolean;
   state: "not_yet" | "initiated" | "partial" | "covered";
@@ -74,24 +82,34 @@ export interface TranscriptTurn {
   created_at: string;
 }
 
+export interface UnassessedSkill {
+  skill_id?: string | null;
+  skill_label: string;
+  expected_level: number;
+  coverage_state: "not_yet" | "initiated" | "partial" | "covered";
+  probe_count: number;
+}
+
 export interface Portfolio {
   id: number;
   session_id: number;
   candidate_id?: number;
+  candidate_name?: string | null;
   generation_status: "pending" | "generating" | "complete" | "failed";
   generated_at?: string;
   generation_error?: string;
   skills: PortfolioSkill[];
+  unassessed_skills?: UnassessedSkill[];
   overrides: AssessorOverride[];
 }
 
 export interface PortfolioSkill {
   id: number;
-  skill_id?: number;
+  skill_id?: string | null;
   skill_label: string;
   is_discovered: boolean;
-  ai_level: string;       // "L1" | "L2" | "L3" | "L4" | "L5"
-  ai_confidence: string;  // "high" | "medium" | "low"
+  ai_level: number | string; // 1..5 or "L1".."L5"
+  ai_confidence: string;     // "high" | "medium" | "low"
   evidence: string[];
   competency_summary: string;
 }
@@ -119,20 +137,29 @@ export interface Vacancy {
 
 export interface VacancySkill {
   id?: number;
-  skill_id?: number;
+  skill_id?: string | null;
   skill_label: string;
   expected_level: number;
+  l1_anchor?: string;
+  l2_anchor?: string;
+  l3_anchor?: string;
+  l4_anchor?: string;
+  l5_anchor?: string;
   _destroy?: boolean;
 }
 
 export type SkillComparisonResult = "match" | "gap" | "exceed" | "not_assessed";
 
 export interface SkillComparison {
+  skill_id?: string | null;
   skill_label: string;
   required_level: number;
-  candidate_level?: number;
+  expected_level?: number;
+  candidate_level?: number | null;
+  ai_level?: number | null;
   result: SkillComparisonResult;
-  delta?: number;
+  delta?: number | null;
+  confidence?: string | null;
   is_override?: boolean;
 }
 
@@ -163,7 +190,12 @@ export interface CandidateInfo {
   session_id: number;
   role_title: string;
   time_limit_min: number;
+  language?: "en" | "id";
   session_status: string;
+  started_at?: string | null;
+  candidate_name?: string | null;
+  consent_given?: boolean;
+  consent_given_at?: string | null;
 }
 
 export interface PaginationMeta {
